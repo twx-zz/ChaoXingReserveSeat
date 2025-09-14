@@ -5,6 +5,8 @@ import os
 import logging
 import datetime
 import threading
+import requests
+import requests.adapters
 from queue import Queue
 from concurrent.futures import ThreadPoolExecutor
 import random

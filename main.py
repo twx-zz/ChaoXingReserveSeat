@@ -31,7 +31,7 @@ get_current_dayofweek = lambda action: (
 
 # ================= 超速模式参数 - 专治303超时 =================
 SLEEPTIME = 0.01  # 极短间隔
-RESERVE_TARGET_TIME = "22:00:00"  
+RESERVE_TARGET_TIME = "15:23:00"  
 ENABLE_SLIDER = True  
 MAX_ATTEMPT = 1  # 单次尝试，极速失败
 RESERVE_NEXT_DAY = False

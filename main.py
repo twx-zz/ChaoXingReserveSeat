@@ -30,17 +30,18 @@ RESERVE_TARGET_TIME = "16:14:00"  # 预约开始的目标时间（北京时间�
 ENABLE_SLIDER = True  # 是否有滑块验证
 MAX_ATTEMPT = 1  # 减少重试次数，专注速度
 RESERVE_NEXT_DAY = False  # 预约明天而不是今天的
-CAPTCHA_POOL_SIZE = 5  # 验证码池大小，减少到3个避免过期
-CAPTCHA_PRELOAD_TIME = 5  # 提前5秒开始预加载验证码
+CAPTCHA_POOL_SIZE = 3  # 验证码池大小，减少避免过期
+CAPTCHA_PRELOAD_TIME = 3  # 提前3秒开始预加载验证码，避免过期
 
 class CaptchaPool:
-    """验证码缓存池"""
+    """验证码缓存池 - 优化版本，防止过期"""
     def __init__(self, session, pool_size=CAPTCHA_POOL_SIZE):
         self.session = session
         self.pool_size = pool_size
         self.captcha_queue = Queue()
         self.is_active = True
         self.lock = threading.Lock()
+        self.last_refresh_time = time.time()
         
     def start_preloading(self):
         """开始预加载验证码"""
@@ -49,30 +50,56 @@ class CaptchaPool:
         def preload_worker():
             while self.is_active and self.captcha_queue.qsize() < self.pool_size:
                 try:
+                    # 刷新session状态，防止过期
+                    self.session.refresh_session()
+                    
                     captcha = self.session.resolve_captcha()
                     if captcha:
-                        self.captcha_queue.put(captcha)
+                        self.captcha_queue.put((captcha, time.time()))
                         logging.info(f"✅ 验证码预加载成功，当前池大小: {self.captcha_queue.qsize()}")
-                    time.sleep(0.5)  # 避免请求过快
+                    time.sleep(0.3)  # 避免请求过快
                 except Exception as e:
                     logging.warning(f"⚠️ 验证码预加载失败: {e}")
-                    time.sleep(1)
+                    time.sleep(0.5)
         
         # 启动预加载线程
         thread = threading.Thread(target=preload_worker, daemon=True)
         thread.start()
     
-    def get_captcha(self):
-        """获取一个验证码"""
-        if not self.captcha_queue.empty():
-            return self.captcha_queue.get()
-        else:
-            logging.warning("⚠️ 验证码池为空，临时生成验证码")
+    def get_fresh_captcha(self):
+        """获取新鲜的验证码（实时生成）"""
+        try:
+            # 刷新session状态
+            self.session.refresh_session()
             return self.session.resolve_captcha()
+        except Exception as e:
+            logging.error(f"💥 获取新鲜验证码失败: {e}")
+            return ""
+    
+    def get_captcha(self):
+        """获取一个验证码 - 优先使用新鲜验证码"""
+        # 直接获取新鲜验证码，避免使用可能过期的池中验证码
+        return self.get_fresh_captcha()
     
     def stop(self):
         """停止预加载"""
         self.is_active = False
+
+def refresh_session_status(session, roomid, seatid):
+    """刷新Session状态，防止过期"""
+    try:
+        # 重新访问座位页面，刷新session状态
+        session.requests.get(
+            f"https://office.chaoxing.com/front/third/apps/seat/code?id={roomid}&seatNum={seatid}", 
+            verify=False
+        )
+        # 访问其他关键页面保持活跃
+        session.requests.get("https://office.chaoxing.com/data/apps/seat/getusedtimes", verify=False)
+        logging.info("🔄 Session状态已刷新")
+        return True
+    except Exception as e:
+        logging.warning(f"⚠️ Session状态刷新失败: {e}")
+        return False
 
 def warm_up_session(session, roomid, seatid):
     """Session预热 - 模拟正常浏览行为"""
@@ -93,23 +120,26 @@ def warm_up_session(session, roomid, seatid):
     except Exception as e:
         logging.warning(f"⚠️ Session预热失败: {e}")
 
-def rapid_submit_single(session, times, roomid, seatid, captcha_pool, action):
-    """极速提交单个预约"""
+def rapid_submit_single_enhanced(session, times, roomid, seatid, captcha_pool, action):
+    """增强版极速提交单个预约 - 防止session过期"""
     start_time = time.time()
     
     try:
-        # 1. 立即获取验证码（从池中取）
-        captcha = captcha_pool.get_captcha()
+        # 1. 刷新session状态，防止过期
+        refresh_session_status(session, roomid, seatid)
+        
+        # 2. 获取新鲜验证码（实时生成，避免过期）
+        captcha = captcha_pool.get_fresh_captcha()
         captcha_time = time.time()
         
-        # 2. 快速获取token
+        # 3. 立即获取token
         token, value = session._get_page_token(
             session.url.format(roomid, seatid), require_value=True
         )
         token_time = time.time()
         logging.info(f"⚡ 快速获取token: {token} (耗时: {token_time - captcha_time:.2f}s)")
         
-        # 3. 立即提交
+        # 4. 立即提交
         success = session.get_submit(
             session.submit_url,
             times=times,
@@ -135,7 +165,7 @@ def rapid_submit_single(session, times, roomid, seatid, captcha_pool, action):
         return False
 
 def pre_login_users(users, usernames, passwords, action):
-    """提前登录所有用户并预热（不预加载验证码）"""
+    """提前登录所有用户并预热"""
     logged_sessions = []
     current_dayofweek = get_current_dayofweek(action)
     
@@ -175,8 +205,8 @@ def pre_login_users(users, usernames, passwords, action):
     
     return logged_sessions
 
-def wait_for_target_time_with_captcha_preload(target_time, action, logged_sessions):
-    """等待到达目标时间，并在最后几秒开始预加载验证码"""
+def wait_for_target_time_minimal_preload(target_time, action, logged_sessions):
+    """等待到达目标时间，最小化预加载时间"""
     current_time = get_current_time(action)
     
     if current_time < target_time:
@@ -206,13 +236,12 @@ def wait_for_target_time_with_captcha_preload(target_time, action, logged_sessio
             logging.info(f"距离目标时间 {target_time}（北京时间）还有 {wait_seconds:.1f} 秒，先等待 {wait_until_preload:.1f} 秒...")
             time.sleep(wait_until_preload)
             
-            # 开始预加载验证码
-            logging.info(f"🔄 开始预加载验证码池，提前 {CAPTCHA_PRELOAD_TIME} 秒")
+            # 开始最小化预加载
+            logging.info(f"🔄 开始最小化预加载，提前 {CAPTCHA_PRELOAD_TIME} 秒")
             captcha_pools = []
             for s in logged_sessions:
                 if s is not None:
-                    captcha_pool = CaptchaPool(s, CAPTCHA_POOL_SIZE)
-                    captcha_pool.start_preloading()
+                    captcha_pool = CaptchaPool(s, 1)  # 池大小设为1，避免过期
                     captcha_pools.append(captcha_pool)
                 else:
                     captcha_pools.append(None)
@@ -220,13 +249,12 @@ def wait_for_target_time_with_captcha_preload(target_time, action, logged_sessio
             # 等待剩余时间
             time.sleep(CAPTCHA_PRELOAD_TIME)
         else:
-            # 如果等待时间很短，立即开始预加载并等待
-            logging.info(f"🔄 立即开始预加载验证码池")
+            # 如果等待时间很短，立即创建池
+            logging.info(f"🔄 立即创建验证码池")
             captcha_pools = []
             for s in logged_sessions:
                 if s is not None:
-                    captcha_pool = CaptchaPool(s, CAPTCHA_POOL_SIZE)
-                    captcha_pool.start_preloading()
+                    captcha_pool = CaptchaPool(s, 1)
                     captcha_pools.append(captcha_pool)
                 else:
                     captcha_pools.append(None)
@@ -237,8 +265,7 @@ def wait_for_target_time_with_captcha_preload(target_time, action, logged_sessio
         captcha_pools = []
         for s in logged_sessions:
             if s is not None:
-                captcha_pool = CaptchaPool(s, CAPTCHA_POOL_SIZE)
-                captcha_pool.start_preloading()
+                captcha_pool = CaptchaPool(s, 1)
                 captcha_pools.append(captcha_pool)
             else:
                 captcha_pools.append(None)
@@ -246,8 +273,8 @@ def wait_for_target_time_with_captcha_preload(target_time, action, logged_sessio
     logging.info(f"到达目标时间 {target_time}（北京时间），开始预约")
     return captcha_pools
 
-def start_reservation_optimized(users, logged_sessions, captcha_pools, action):
-    """开始极速预约 - 修改版：尝试预约所有时间段"""
+def start_reservation_enhanced(users, logged_sessions, captcha_pools, action):
+    """增强版预约开始 - 防止session过期"""
     current_dayofweek = get_current_dayofweek(action)
     
     for index, user in enumerate(users):
@@ -269,11 +296,11 @@ def start_reservation_optimized(users, logged_sessions, captcha_pools, action):
         # 记录成功预约的时间段
         successful_reservations = []
         
-        # 尝试预约所有时间段（不会因为成功而中断）
+        # 尝试预约所有时间段
         for i, time_slot in enumerate(time_slots):
             logging.info(f"⚡ 预约时间段 {i+1}/{len(time_slots)}: {time_slot}")
             
-            success = rapid_submit_single(
+            success = rapid_submit_single_enhanced(
                 s, time_slot, roomid, seatid[0], captcha_pool, action
             )
             
@@ -283,7 +310,7 @@ def start_reservation_optimized(users, logged_sessions, captcha_pools, action):
             else:
                 logging.warning(f"❌ 时间段 {time_slot} 预约失败")
             
-            # 短暂间隔，避免限流（但不会跳出循环）
+            # 短暂间隔，避免限流
             if i < len(time_slots) - 1:
                 time.sleep(0.2)
         
@@ -304,14 +331,14 @@ def main(users, action=False):
     if action:
         usernames, passwords = get_user_credentials(action)
     
-    # 提前登录所有用户并预热（不预加载验证码）
+    # 提前登录所有用户并预热
     logged_sessions = pre_login_users(users, usernames, passwords, action)
     
-    # 等待目标时间，并在最后几秒预加载验证码
-    captcha_pools = wait_for_target_time_with_captcha_preload(RESERVE_TARGET_TIME, action, logged_sessions)
+    # 等待目标时间，最小化预加载避免过期
+    captcha_pools = wait_for_target_time_minimal_preload(RESERVE_TARGET_TIME, action, logged_sessions)
     
-    # 开始极速预约
-    start_reservation_optimized(users, logged_sessions, captcha_pools, action)
+    # 开始增强版极速预约
+    start_reservation_enhanced(users, logged_sessions, captcha_pools, action)
 
 def debug(users, action=False):
     logging.info(
@@ -346,22 +373,20 @@ def debug(users, action=False):
         s.login(username, password)
         s.requests.headers.update({"Host": "office.chaoxing.com"})
         
-        # 预热并测试极速提交
-        captcha_pool = CaptchaPool(s, 3)
-        captcha_pool.start_preloading()
-        time.sleep(2)  # 等待验证码预加载
+        # 预热并测试增强版极速提交
+        captcha_pool = CaptchaPool(s, 1)
         
-        # 测试所有时间段的快速预约（修改：不会因成功而中断）
+        # 测试所有时间段的快速预约
         successful_debug_reservations = []
         if isinstance(times[0], list):
             for i, time_slot in enumerate(times):
-                success = rapid_submit_single(s, time_slot, roomid, seatid[0], captcha_pool, action)
+                success = rapid_submit_single_enhanced(s, time_slot, roomid, seatid[0], captcha_pool, action)
                 if success:
                     successful_debug_reservations.append(time_slot)
-                if i < len(times) - 1:  # 避免最后一次也等待
+                if i < len(times) - 1:
                     time.sleep(0.3)
         else:
-            success = rapid_submit_single(s, times, roomid, seatid[0], captcha_pool, action)
+            success = rapid_submit_single_enhanced(s, times, roomid, seatid[0], captcha_pool, action)
             if success:
                 successful_debug_reservations.append(times)
         

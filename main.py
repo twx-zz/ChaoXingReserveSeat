@@ -30,12 +30,12 @@ get_current_dayofweek = lambda action: (
 
 # ================= 晚高峰专用参数 =================
 SLEEPTIME = 0.02  # 极短间隔
-RESERVE_TARGET_TIME = "22:00:00"  
+RESERVE_TARGET_TIME = "15:29:00"  
 ENABLE_SLIDER = True  
 MAX_ATTEMPT = 1  # 只试一次，避免token过期
 RESERVE_NEXT_DAY = True
 CAPTCHA_POOL_SIZE = 8  # 增大验证码池应对高峰
-CAPTCHA_PRELOAD_AT = "21:59:50"  # 提前10秒预加载
+CAPTCHA_PRELOAD_AT = "15:28:50"  # 提前10秒预加载
 TOKEN_EXPIRE_TIME = 5  # 假设高峰期token只有5秒有效期
 PEAK_HOUR_MODE = True  # 高峰期模式
 # ==========================================

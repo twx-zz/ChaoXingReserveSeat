@@ -180,13 +180,13 @@ def wait_for_target_time(target_time, action, preload_time=CAPTCHA_PRELOAD_TIME)
     preload_dt = target_dt - datetime.timedelta(seconds=preload_time)
     now = datetime.datetime.now()
 
+    # 如果当前时间比预加载时间早，就等到预加载时刻
     if now < preload_dt:
         sleep_time = (preload_dt - now).total_seconds()
         logging.info(f"离验证码预加载还有 {sleep_time:.1f} 秒，sleep……")
         time.sleep(sleep_time)
-        logging.info(f"到达预加载时间点，启动验证码池")
 
-    # 返回目标时间点，调用者可以在这里启动验证码池
+    logging.info("到达预加载时间点，启动验证码池")
     return target_dt
 
 
@@ -223,7 +223,9 @@ def main(users, action=False):
     logged_sessions, captcha_pools = pre_login_users(
         users, usernames, passwords, action
     )
-    target_dt = wait_for_target_time(RESERVE_TARGET_TIME, action, preload_time=CAPTCHA_PRELOAD_TIME)
+    target_dt = wait_for_target_time(
+        RESERVE_TARGET_TIME, action, preload_time=CAPTCHA_PRELOAD_TIME
+    )
     now = datetime.datetime.now()
     if now < target_dt:
         sleep_time = (target_dt - now).total_seconds()

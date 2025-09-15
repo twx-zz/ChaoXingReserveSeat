@@ -247,7 +247,7 @@ def wait_for_target_time_with_captcha_preload(target_time, action, logged_sessio
     return captcha_pools
 
 def start_reservation_optimized(users, logged_sessions, captcha_pools, action):
-    """开始极速预约"""
+    """开始极速预约 - 修改版：尝试预约所有时间段"""
     current_dayofweek = get_current_dayofweek(action)
     
     for index, user in enumerate(users):
@@ -266,7 +266,10 @@ def start_reservation_optimized(users, logged_sessions, captcha_pools, action):
         # 处理时间段
         time_slots = times if isinstance(times[0], list) else [times]
         
-        # 快速串行提交所有时间段
+        # 记录成功预约的时间段
+        successful_reservations = []
+        
+        # 尝试预约所有时间段（不会因为成功而中断）
         for i, time_slot in enumerate(time_slots):
             logging.info(f"⚡ 预约时间段 {i+1}/{len(time_slots)}: {time_slot}")
             
@@ -275,12 +278,20 @@ def start_reservation_optimized(users, logged_sessions, captcha_pools, action):
             )
             
             if success:
+                successful_reservations.append(time_slot)
                 logging.info(f"✅ 时间段 {time_slot} 预约成功！")
-                break  # 成功后跳出循环
+            else:
+                logging.warning(f"❌ 时间段 {time_slot} 预约失败")
             
-            # 短暂间隔，避免限流
+            # 短暂间隔，避免限流（但不会跳出循环）
             if i < len(time_slots) - 1:
                 time.sleep(0.2)
+        
+        # 输出最终结果
+        if successful_reservations:
+            logging.info(f"🎊 用户 {username} 预约汇总：成功预约了 {len(successful_reservations)} 个时间段: {successful_reservations}")
+        else:
+            logging.warning(f"😞 用户 {username} 预约汇总：所有时间段预约均失败")
         
         # 停止验证码池
         captcha_pool.stop()
@@ -340,13 +351,21 @@ def debug(users, action=False):
         captcha_pool.start_preloading()
         time.sleep(2)  # 等待验证码预加载
         
-        # 测试快速预约
+        # 测试所有时间段的快速预约（修改：不会因成功而中断）
+        successful_debug_reservations = []
         if isinstance(times[0], list):
-            for time_slot in times:
-                rapid_submit_single(s, time_slot, roomid, seatid[0], captcha_pool, action)
-                time.sleep(0.3)
+            for i, time_slot in enumerate(times):
+                success = rapid_submit_single(s, time_slot, roomid, seatid[0], captcha_pool, action)
+                if success:
+                    successful_debug_reservations.append(time_slot)
+                if i < len(times) - 1:  # 避免最后一次也等待
+                    time.sleep(0.3)
         else:
-            rapid_submit_single(s, times, roomid, seatid[0], captcha_pool, action)
+            success = rapid_submit_single(s, times, roomid, seatid[0], captcha_pool, action)
+            if success:
+                successful_debug_reservations.append(times)
+        
+        logging.info(f"🔍 调试模式预约汇总：成功预约了 {len(successful_debug_reservations)} 个时间段: {successful_debug_reservations}")
         
         captcha_pool.stop()
         return

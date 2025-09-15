@@ -26,12 +26,12 @@ get_current_dayofweek = lambda action: (
 )
 
 SLEEPTIME = 0.1  # 减少间隔时间
-RESERVE_TARGET_TIME = "15:37:00"  # 预约开始的目标时间（北京时间）
+RESERVE_TARGET_TIME = "15:46:00"  # 预约开始的目标时间（北京时间）
 ENABLE_SLIDER = True  # 是否有滑块验证
 MAX_ATTEMPT = 1  # 减少重试次数，专注速度
 RESERVE_NEXT_DAY = False  # 预约明天而不是今天的
-CAPTCHA_POOL_SIZE = 5  # 验证码池大小
-CAPTCHA_PRELOAD_TIME = 5  # 提前5分钟开始预加载验证码
+CAPTCHA_POOL_SIZE = 5  # 验证码池大小，减少到3个避免过期
+CAPTCHA_PRELOAD_TIME = 5  # 提前5秒开始预加载验证码
 
 class CaptchaPool:
     """验证码缓存池"""
@@ -58,10 +58,9 @@ class CaptchaPool:
                     logging.warning(f"⚠️ 验证码预加载失败: {e}")
                     time.sleep(1)
         
-        # 启动多个预加载线程
-        for i in range(1):
-            thread = threading.Thread(target=preload_worker, daemon=True)
-            thread.start()
+        # 启动预加载线程
+        thread = threading.Thread(target=preload_worker, daemon=True)
+        thread.start()
     
     def get_captcha(self):
         """获取一个验证码"""
@@ -136,9 +135,8 @@ def rapid_submit_single(session, times, roomid, seatid, captcha_pool, action):
         return False
 
 def pre_login_users(users, usernames, passwords, action):
-    """提前登录所有用户并预热"""
+    """提前登录所有用户并预热（不预加载验证码）"""
     logged_sessions = []
-    captcha_pools = []
     current_dayofweek = get_current_dayofweek(action)
     
     for index, user in enumerate(users):
@@ -152,7 +150,6 @@ def pre_login_users(users, usernames, passwords, action):
         if current_dayofweek not in daysofweek:
             logging.info("Today not set to reserve")
             logged_sessions.append(None)
-            captcha_pools.append(None)
             continue
             
         logging.info(f"User {username}: 提前登录中...")
@@ -169,25 +166,17 @@ def pre_login_users(users, usernames, passwords, action):
         
         if login_success:
             s.requests.headers.update({"Host": "office.chaoxing.com"})
-            
             # Session预热
             warm_up_session(s, roomid, seatid)
-            
-            # 创建验证码池并开始预加载
-            captcha_pool = CaptchaPool(s, CAPTCHA_POOL_SIZE)
-            captcha_pool.start_preloading()
-            
             logged_sessions.append(s)
-            captcha_pools.append(captcha_pool)
         else:
             logging.error(f"User {username} login failed: {msg}")
             logged_sessions.append(None)
-            captcha_pools.append(None)
     
-    return logged_sessions, captcha_pools
+    return logged_sessions
 
-def wait_for_target_time(target_time, action):
-    """等待到达目标时间"""
+def wait_for_target_time_with_captcha_preload(target_time, action, logged_sessions):
+    """等待到达目标时间，并在最后几秒开始预加载验证码"""
     current_time = get_current_time(action)
     
     if current_time < target_time:
@@ -210,11 +199,52 @@ def wait_for_target_time(target_time, action):
             target_dt += datetime.timedelta(days=1)
         
         wait_seconds = (target_dt - current_dt).total_seconds()
-        logging.info(f"距离目标时间 {target_time}（北京时间）还有 {wait_seconds:.1f} 秒，sleep……")
         
-        time.sleep(wait_seconds)
+        # 如果等待时间大于预加载时间，先等待到预加载时机
+        if wait_seconds > CAPTCHA_PRELOAD_TIME:
+            wait_until_preload = wait_seconds - CAPTCHA_PRELOAD_TIME
+            logging.info(f"距离目标时间 {target_time}（北京时间）还有 {wait_seconds:.1f} 秒，先等待 {wait_until_preload:.1f} 秒...")
+            time.sleep(wait_until_preload)
+            
+            # 开始预加载验证码
+            logging.info(f"🔄 开始预加载验证码池，提前 {CAPTCHA_PRELOAD_TIME} 秒")
+            captcha_pools = []
+            for s in logged_sessions:
+                if s is not None:
+                    captcha_pool = CaptchaPool(s, CAPTCHA_POOL_SIZE)
+                    captcha_pool.start_preloading()
+                    captcha_pools.append(captcha_pool)
+                else:
+                    captcha_pools.append(None)
+            
+            # 等待剩余时间
+            time.sleep(CAPTCHA_PRELOAD_TIME)
+        else:
+            # 如果等待时间很短，立即开始预加载并等待
+            logging.info(f"🔄 立即开始预加载验证码池")
+            captcha_pools = []
+            for s in logged_sessions:
+                if s is not None:
+                    captcha_pool = CaptchaPool(s, CAPTCHA_POOL_SIZE)
+                    captcha_pool.start_preloading()
+                    captcha_pools.append(captcha_pool)
+                else:
+                    captcha_pools.append(None)
+            time.sleep(wait_seconds)
+    else:
+        # 目标时间已过，立即创建验证码池
+        logging.info(f"🔄 目标时间已过，立即创建验证码池")
+        captcha_pools = []
+        for s in logged_sessions:
+            if s is not None:
+                captcha_pool = CaptchaPool(s, CAPTCHA_POOL_SIZE)
+                captcha_pool.start_preloading()
+                captcha_pools.append(captcha_pool)
+            else:
+                captcha_pools.append(None)
     
     logging.info(f"到达目标时间 {target_time}（北京时间），开始预约")
+    return captcha_pools
 
 def start_reservation_optimized(users, logged_sessions, captcha_pools, action):
     """开始极速预约"""
@@ -246,7 +276,7 @@ def start_reservation_optimized(users, logged_sessions, captcha_pools, action):
             
             if success:
                 logging.info(f"✅ 时间段 {time_slot} 预约成功！")
-
+                break  # 成功后跳出循环
             
             # 短暂间隔，避免限流
             if i < len(time_slots) - 1:
@@ -263,18 +293,18 @@ def main(users, action=False):
     if action:
         usernames, passwords = get_user_credentials(action)
     
-    # 提前登录所有用户并预热
-    logged_sessions, captcha_pools = pre_login_users(users, usernames, passwords, action)
+    # 提前登录所有用户并预热（不预加载验证码）
+    logged_sessions = pre_login_users(users, usernames, passwords, action)
     
-    # 等待目标时间
-    wait_for_target_time(RESERVE_TARGET_TIME, action)
+    # 等待目标时间，并在最后几秒预加载验证码
+    captcha_pools = wait_for_target_time_with_captcha_preload(RESERVE_TARGET_TIME, action, logged_sessions)
     
     # 开始极速预约
     start_reservation_optimized(users, logged_sessions, captcha_pools, action)
 
 def debug(users, action=False):
     logging.info(
-        f"Global settings: \nSLEEPTIME: {SLEEPTIME}\nRESERVE_TARGET_TIME: {RESERVE_TARGET_TIME}\nENABLE_SLIDER: {ENABLE_SLIDER}\nRESERVE_NEXT_DAY: {RESERVE_NEXT_DAY}\nCAPTCHA_POOL_SIZE: {CAPTCHA_POOL_SIZE}"
+        f"Global settings: \nSLEEPTIME: {SLEEPTIME}\nRESERVE_TARGET_TIME: {RESERVE_TARGET_TIME}\nENABLE_SLIDER: {ENABLE_SLIDER}\nRESERVE_NEXT_DAY: {RESERVE_NEXT_DAY}\nCAPTCHA_POOL_SIZE: {CAPTCHA_POOL_SIZE}\nCAPTCHA_PRELOAD_TIME: {CAPTCHA_PRELOAD_TIME}"
     )
     logging.info(f"Debug Mode start! , action {'on' if action else 'off'}")
     

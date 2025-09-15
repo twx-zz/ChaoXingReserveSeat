@@ -25,12 +25,12 @@ get_current_dayofweek = lambda action: (
 )
 
 SLEEPTIME = 0.1
-RESERVE_TARGET_TIME = "16:41:00"
+RESERVE_TARGET_TIME = "16:44:00"
 ENABLE_SLIDER = True
 MAX_ATTEMPT = 1
 RESERVE_NEXT_DAY = False
 CAPTCHA_POOL_SIZE = 5
-CAPTCHA_PRELOAD_TIME = 10
+CAPTCHA_PRELOAD_TIME = 5  # 提前5秒开始预加载验证码
 
 
 class CaptchaPool:
@@ -152,7 +152,6 @@ def pre_login_users(users, usernames, passwords, action):
             s.requests.headers.update({"Host": "office.chaoxing.com"})
             warm_up_session(s, roomid, seatid)
             captcha_pool = CaptchaPool(s, CAPTCHA_POOL_SIZE)
-            captcha_pool.start_preloading()
             logged_sessions.append(s)
             captcha_pools.append(captcha_pool)
         else:
@@ -163,27 +162,32 @@ def pre_login_users(users, usernames, passwords, action):
     return logged_sessions, captcha_pools
 
 
-def wait_for_target_time(target_time, action):
-    current_time = get_current_time(action)
-    if current_time < target_time:
-        if action:
-            current_dt = datetime.datetime.utcnow() + datetime.timedelta(hours=8)
-        else:
-            current_dt = datetime.datetime.now()
-        target_dt = current_dt.replace(
-            hour=int(target_time.split(":")[0]),
-            minute=int(target_time.split(":")[1]),
-            second=int(target_time.split(":")[2]),
-            microsecond=0,
-        )
-        if target_dt <= current_dt:
-            target_dt += datetime.timedelta(days=1)
-        wait_seconds = (target_dt - current_dt).total_seconds()
-        logging.info(
-            f"距离目标时间 {target_time}（北京时间）还有 {wait_seconds:.1f} 秒，sleep……"
-        )
-        time.sleep(wait_seconds)
-    logging.info(f"到达目标时间 {target_time}（北京时间），开始预约")
+def wait_for_target_time(target_time, action, preload_time=CAPTCHA_PRELOAD_TIME):
+    if action:
+        current_dt = datetime.datetime.utcnow() + datetime.timedelta(hours=8)
+    else:
+        current_dt = datetime.datetime.now()
+
+    target_dt = current_dt.replace(
+        hour=int(target_time.split(":")[0]),
+        minute=int(target_time.split(":")[1]),
+        second=int(target_time.split(":")[2]),
+        microsecond=0,
+    )
+    if target_dt <= current_dt:
+        target_dt += datetime.timedelta(days=1)
+
+    preload_dt = target_dt - datetime.timedelta(seconds=preload_time)
+    now = datetime.datetime.now()
+
+    if now < preload_dt:
+        sleep_time = (preload_dt - now).total_seconds()
+        logging.info(f"离验证码预加载还有 {sleep_time:.1f} 秒，sleep……")
+        time.sleep(sleep_time)
+        logging.info(f"到达预加载时间点，启动验证码池")
+
+    # 返回目标时间点，调用者可以在这里启动验证码池
+    return target_dt
 
 
 def start_reservation_optimized(users, logged_sessions, captcha_pools, action):
@@ -197,6 +201,7 @@ def start_reservation_optimized(users, logged_sessions, captcha_pools, action):
         if s is None or captcha_pool is None:
             continue
         logging.info(f"🚀 开始极速预约 - 用户 {username}")
+        captcha_pool.start_preloading()
         time_slots = times if isinstance(times[0], list) else [times]
         for i, time_slot in enumerate(time_slots):
             logging.info(f"⚡ 预约时间段 {i+1}/{len(time_slots)}: {time_slot}")
@@ -218,7 +223,13 @@ def main(users, action=False):
     logged_sessions, captcha_pools = pre_login_users(
         users, usernames, passwords, action
     )
-    wait_for_target_time(RESERVE_TARGET_TIME, action)
+    target_dt = wait_for_target_time(RESERVE_TARGET_TIME, action, preload_time=CAPTCHA_PRELOAD_TIME)
+    now = datetime.datetime.now()
+    if now < target_dt:
+        sleep_time = (target_dt - now).total_seconds()
+        logging.info(f"离目标时间还有 {sleep_time:.1f} 秒，sleep……")
+        time.sleep(sleep_time)
+    logging.info(f"到达目标时间 {RESERVE_TARGET_TIME}（北京时间），开始预约")
     start_reservation_optimized(users, logged_sessions, captcha_pools, action)
 
 

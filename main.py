@@ -36,7 +36,7 @@ ENABLE_SLIDER = True
 MAX_ATTEMPT = 1  # 单次尝试，极速失败
 RESERVE_NEXT_DAY = False
 CAPTCHA_POOL_SIZE = 5  # 更大的验证码池
-CAPTCHA_PRELOAD_AT = "21:59:55"  # 提前15秒预加载
+CAPTCHA_PRELOAD_AT = "15:22:55"  # 提前15秒预加载
 
 # 🚀 超时控制 - 严格限制
 PARALLEL_TIMEOUT = 2  # 并行获取超时2秒

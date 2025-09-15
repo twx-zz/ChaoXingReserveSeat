@@ -26,12 +26,12 @@ get_current_dayofweek = lambda action: (
 )
 
 SLEEPTIME = 0.1  # 减少间隔时间
-RESERVE_TARGET_TIME = "17:13:00"  # 预约开始的目标时间（北京时间）
+RESERVE_TARGET_TIME = "17:17:00"  # 预约开始的目标时间（北京时间）
 ENABLE_SLIDER = True  # 是否有滑块验证
 MAX_ATTEMPT = 1  # 减少重试次数，专注速度
 RESERVE_NEXT_DAY = False  # 预约明天而不是今天的
 CAPTCHA_POOL_SIZE = 5  # 验证码池大小
-CAPTCHA_PRELOAD_TIME = 5  # 提前5分钟开始预加载验证码
+CAPTCHA_PRELOAD_TIME = 5  # 提前5秒开始预加载验证码
 
 class CaptchaPool:
     """验证码缓存池"""
@@ -173,7 +173,7 @@ def pre_login_users(users, usernames, passwords, action):
             # Session预热
             warm_up_session(s, roomid, seatid)
             
-            # 创建验证码池（不立刻启动）
+            # 只创建验证码池，不立刻预加载
             captcha_pool = CaptchaPool(s, CAPTCHA_POOL_SIZE)
             
             logged_sessions.append(s)
@@ -264,7 +264,7 @@ def main(users, action=False):
     # 提前登录所有用户并预热
     logged_sessions, captcha_pools = pre_login_users(users, usernames, passwords, action)
     
-    # 在目标时间前 5 秒启动验证码池
+    # 在目标时间前 CAPTCHA_PRELOAD_TIME 秒启动验证码池
     if action:
         current_dt = datetime.datetime.utcnow() + datetime.timedelta(hours=8)
     else:
@@ -279,10 +279,10 @@ def main(users, action=False):
     if target_dt <= current_dt:
         target_dt += datetime.timedelta(days=1)
 
-    start_dt = target_dt - datetime.timedelta(seconds=5)
+    start_dt = target_dt - datetime.timedelta(seconds=CAPTCHA_PRELOAD_TIME)
     wait_seconds = (start_dt - current_dt).total_seconds()
     if wait_seconds > 0:
-        logging.info(f"将在 {wait_seconds:.1f} 秒后启动验证码池 (目标时间前5秒)")
+        logging.info(f"将在 {wait_seconds:.1f} 秒后启动验证码池 (目标时间前{CAPTCHA_PRELOAD_TIME}s)")
         time.sleep(wait_seconds)
 
     for pool in captcha_pools:

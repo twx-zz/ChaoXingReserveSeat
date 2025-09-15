@@ -5,11 +5,11 @@
       "password": "xxxxxxx",
       "times": [
         ["8:00", "10:00"],
-        ["14:00", "18:00"],
-        ["18:00", "22:00"]
+        ["16:00", "17:00"],
+        ["17:00", "18:00"]
       ],
-      "roomid": "8740",
-      "seatid": ["084"],
+      "roomid": "6913",
+      "seatid": ["025"],
       "daysofweek": ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
     }
   ]

@@ -4,12 +4,12 @@
       "username": "xxxxxxx",
       "password": "xxxxxxx",
       "times": [
-        ["20:00", "21:00"],
-        ["18:00", "19:00"],
-        ["19:00", "20:00"]
+        ["13:00", "17:00"],
+        ["9:00", "13:00"],
+        ["17:00", "21:00"]
       ],
       "roomid": "6913",
-      "seatid": ["027"],
+      "seatid": ["054"],
       "daysofweek": ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
     }
   ]

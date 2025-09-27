@@ -1,4 +1,4 @@
-name: auto_Sign
+name: auto_Sign2
 
 on:
   schedule:
